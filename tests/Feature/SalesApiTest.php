@@ -161,6 +161,42 @@ class SalesApiTest extends TestCase
         $this->assertDatabaseHas('csv_import_rows', ['csv_import_id' => $import->id, 'status' => 'duplicate']);
     }
 
+    public function test_csv_retries_preserve_existing_row_audit(): void
+    {
+        Queue::fake();
+        Storage::fake('local');
+        $customer = Customer::factory()->create();
+        $path = 'imports/sales/retry.csv';
+        Storage::disk('local')->put($path, "external_id,customer_id,amount,occurred_at\nCSV-RETRY,{$customer->id},10.00,2026-08-20T14:30:00");
+        $import = CsvImport::factory()->create(['path' => $path]);
+        $job = new ImportSalesCsv($import->id);
+
+        $job->handle(app(CreateSaleService::class));
+        $job->handle(app(CreateSaleService::class));
+
+        $this->assertDatabaseCount('sales', 1);
+        $this->assertDatabaseHas('csv_import_rows', [
+            'csv_import_id' => $import->id,
+            'line_number' => 2,
+            'status' => 'processed',
+        ]);
+    }
+
+    public function test_csv_with_invalid_header_is_marked_as_failed(): void
+    {
+        Storage::fake('local');
+        $path = 'imports/sales/invalid-header.csv';
+        Storage::disk('local')->put($path, "customer_id,amount\n145,10.00");
+        $import = CsvImport::factory()->create(['path' => $path]);
+
+        try {
+            (new ImportSalesCsv($import->id))->handle(app(CreateSaleService::class));
+        } catch (\UnexpectedValueException) {
+        }
+
+        $this->assertSame('failed', $import->fresh()->status);
+    }
+
     /** @return array<string, int|string|float> */
     private function salePayload(?Customer $customer = null): array
     {

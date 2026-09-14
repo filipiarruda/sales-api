@@ -17,6 +17,8 @@ class ImportSalesCsv implements ShouldQueue
 {
     use Queueable;
 
+    public int $tries = 3;
+
     /**
      * Create a new job instance.
      */
@@ -76,6 +78,12 @@ class ImportSalesCsv implements ShouldQueue
         ]);
     }
 
+    /** @return array<int, int> */
+    public function backoff(): array
+    {
+        return [5, 30, 60];
+    }
+
     /** @param array<int, string|null> $header
      * @return array<int, string>
      */
@@ -93,6 +101,15 @@ class ImportSalesCsv implements ShouldQueue
      */
     private function processRow(CsvImport $import, int $lineNumber, array $header, array $row, CreateSaleService $createSale): void
     {
+        $existingRow = CsvImportRow::query()
+            ->where('csv_import_id', $import->id)
+            ->where('line_number', $lineNumber)
+            ->first();
+
+        if ($existingRow !== null && $existingRow->status !== 'failed') {
+            return;
+        }
+
         $externalId = isset($row[0]) ? trim((string) $row[0]) : null;
 
         if (count($row) !== count($header)) {
