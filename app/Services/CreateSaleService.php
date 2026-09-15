@@ -5,10 +5,11 @@ namespace App\Services;
 use App\Jobs\ProcessSalePoints;
 use App\Models\Sale;
 use Illuminate\Database\UniqueConstraintViolationException;
+use Illuminate\Support\Facades\Log;
 
 class CreateSaleService
 {
-    /** @return array<string, array<int, string>> */
+
     public static function validationRules(): array
     {
         return [
@@ -19,9 +20,6 @@ class CreateSaleService
         ];
     }
 
-    /**
-     * @param  array{external_id: string, customer_id: int|string, amount: string|int|float, occurred_at: string}  $data
-     */
     public function create(array $data, string $source): Sale
     {
         try {
@@ -34,6 +32,13 @@ class CreateSaleService
             ]);
         } catch (UniqueConstraintViolationException) {
             $sale = Sale::query()->where('external_id', $data['external_id'])->firstOrFail();
+
+            Log::info('Sale duplicate ignored.', [
+                'sale_id' => $sale->id,
+                'external_id' => $sale->external_id,
+                'customer_id' => $sale->customer_id,
+                'source' => $source,
+            ]);
 
             return $sale;
         }

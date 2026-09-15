@@ -19,18 +19,17 @@ class ImportSalesCsv implements ShouldQueue
 
     public int $tries = 3;
 
-    /**
-     * Create a new job instance.
-     */
     public function __construct(public int $csvImportId) {}
 
-    /**
-     * Execute the job.
-     */
     public function handle(CreateSaleService $createSale): void
     {
         $import = CsvImport::query()->findOrFail($this->csvImportId);
         $import->update(['status' => 'processing', 'started_at' => $import->started_at ?? now()]);
+
+        Log::info('Importação de arquivoCSV iniciada.', [
+            'csv_import_id' => $import->id,
+            'filename' => $import->filename,
+        ]);
 
         try {
             $file = new SplFileObject(Storage::disk('local')->path($import->path));
@@ -40,7 +39,7 @@ class ImportSalesCsv implements ShouldQueue
             $expectedHeader = ['external_id', 'customer_id', 'amount', 'occurred_at'];
 
             if ($header === false || $this->normalizeHeader($header) !== $expectedHeader) {
-                throw new \UnexpectedValueException('CSV header must be external_id,customer_id,amount,occurred_at.');
+                throw new \UnexpectedValueException('O cabeçalho do CSV deve ser external_id,customer_id,amount,occurred_at.');
             }
 
             $lineNumber = 1;
@@ -78,15 +77,11 @@ class ImportSalesCsv implements ShouldQueue
         ]);
     }
 
-    /** @return array<int, int> */
     public function backoff(): array
     {
         return [5, 30, 60];
     }
 
-    /** @param array<int, string|null> $header
-     * @return array<int, string>
-     */
     private function normalizeHeader(array $header): array
     {
         return array_map(
@@ -95,10 +90,6 @@ class ImportSalesCsv implements ShouldQueue
         );
     }
 
-    /**
-     * @param  array<int, string>  $header
-     * @param  array<int, string|null>  $row
-     */
     private function processRow(CsvImport $import, int $lineNumber, array $header, array $row, CreateSaleService $createSale): void
     {
         $existingRow = CsvImportRow::query()
@@ -113,7 +104,9 @@ class ImportSalesCsv implements ShouldQueue
         $externalId = isset($row[0]) ? trim((string) $row[0]) : null;
 
         if (count($row) !== count($header)) {
-            $this->recordRow($import, $lineNumber, $externalId, 'invalid', 'CSV row has an invalid number of columns.');
+            $message = 'CSV row has an invalid number of columns.';
+            $this->recordRow($import, $lineNumber, $externalId, 'invalid', $message);
+            $this->logInvalidRow($import, $lineNumber, $externalId, [$message]);
 
             return;
         }
@@ -122,7 +115,9 @@ class ImportSalesCsv implements ShouldQueue
         $validator = Validator::make($data, CreateSaleService::validationRules());
 
         if ($validator->fails()) {
-            $this->recordRow($import, $lineNumber, $externalId, 'invalid', implode(' ', $validator->errors()->all()));
+            $errors = $validator->errors()->all();
+            $this->recordRow($import, $lineNumber, $externalId, 'invalid', implode(' ', $errors));
+            $this->logInvalidRow($import, $lineNumber, $externalId, $errors);
 
             return;
         }
@@ -150,6 +145,16 @@ class ImportSalesCsv implements ShouldQueue
         );
     }
 
+    private function logInvalidRow(CsvImport $import, int $lineNumber, ?string $externalId, array $errors): void
+    {
+        Log::warning('CSV import row is invalid.', [
+            'csv_import_id' => $import->id,
+            'line_number' => $lineNumber,
+            'external_id' => $externalId,
+            'validation_errors' => $errors,
+        ]);
+    }
+
     private function finishImport(CsvImport $import): void
     {
         $rows = CsvImportRow::query()->where('csv_import_id', $import->id);
@@ -164,6 +169,15 @@ class ImportSalesCsv implements ShouldQueue
             'ignored_rows' => $ignoredRows,
             'failed_rows' => $failedRows,
             'finished_at' => now(),
+        ]);
+
+        Log::info('CSV import completed.', [
+            'csv_import_id' => $import->id,
+            'status' => $failedRows > 0 ? 'completed_with_errors' : 'completed',
+            'total_rows' => $processedRows + $ignoredRows + $failedRows,
+            'processed_rows' => $processedRows,
+            'ignored_rows' => $ignoredRows,
+            'failed_rows' => $failedRows,
         ]);
     }
 }

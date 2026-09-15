@@ -16,34 +16,49 @@ class ProcessSalePoints implements ShouldQueue
 
     public int $tries = 3;
 
-    /**
-     * Create a new job instance.
-     */
     public function __construct(public int $saleId) {}
 
-    /**
-     * Execute the job.
-     */
     public function handle(): void
     {
-        DB::transaction(function (): void {
-            $sale = Sale::query()->lockForUpdate()->findOrFail($this->saleId);
+        try {
+            DB::transaction(function (): void {
+                $sale = Sale::query()->lockForUpdate()->findOrFail($this->saleId);
 
-            if ($sale->points_processed_at !== null) {
-                return;
-            }
+                if ($sale->points_processed_at !== null) {
+                    Log::info('O processamento dos pontos de venda foi ignorado porque já havia sido processado.', [
+                        'sale_id' => $sale->id,
+                        'external_id' => $sale->external_id,
+                        'customer_id' => $sale->customer_id,
+                        'points_processed_at' => $sale->points_processed_at->toIso8601String(),
+                    ]);
 
-            $points = intdiv($sale->amount, 1000);
+                    return;
+                }
 
-            if ($points > 0) {
-                Customer::query()->whereKey($sale->customer_id)->increment('points_balance', $points);
-            }
+                $points = intdiv($sale->amount, 1000);
 
-            $sale->update([
-                'points_awarded' => $points,
-                'points_processed_at' => now(),
+                if ($points > 0) {
+                    Customer::query()->whereKey($sale->customer_id)->increment('points_balance', $points);
+                }
+
+                $sale->update([
+                    'points_awarded' => $points,
+                    'points_processed_at' => now(),
+                ]);
+            });
+        } catch (Throwable $exception) {
+            $sale = Sale::query()->find($this->saleId);
+
+            Log::error('Tentativa de processamento dos pontos da venda falhou.', [
+                'sale_id' => $this->saleId,
+                'external_id' => $sale?->external_id,
+                'customer_id' => $sale?->customer_id,
+                'attempt' => $this->attempts(),
+                'exception' => $exception->getMessage(),
             ]);
-        });
+
+            throw $exception;
+        }
     }
 
     /** @return array<int, int> */
@@ -56,7 +71,7 @@ class ProcessSalePoints implements ShouldQueue
     {
         $sale = Sale::query()->find($this->saleId);
 
-        Log::error('Sale points processing failed.', [
+        Log::error('A Job de pontos da venda esgotou todas as tentativas.', [
             'sale_id' => $this->saleId,
             'external_id' => $sale?->external_id,
             'customer_id' => $sale?->customer_id,

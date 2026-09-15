@@ -12,6 +12,7 @@ use App\Models\User;
 use App\Services\CreateSaleService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Tests\TestCase;
@@ -52,6 +53,7 @@ class SalesApiTest extends TestCase
 
     public function test_webhook_validates_payload_and_existing_customer(): void
     {
+        Log::spy();
         $payload = $this->salePayload();
         $payload['customer_id'] = 999999;
         $payload['amount'] = 0;
@@ -60,11 +62,17 @@ class SalesApiTest extends TestCase
             ->postJson('/api/webhooks/sales', $payload)
             ->assertUnprocessable()
             ->assertJsonValidationErrors(['customer_id', 'amount']);
+
+        Log::shouldHaveReceived('warning')->once()->withArgs(
+            fn (string $message, array $context): bool => $message === 'Webhook sale payload is invalid.'
+                && $context['source'] === 'webhook',
+        );
     }
 
     public function test_duplicate_webhook_creates_one_sale_and_dispatches_once(): void
     {
         Queue::fake();
+        Log::spy();
         $customer = Customer::factory()->create();
         $payload = $this->salePayload($customer);
 
@@ -75,10 +83,15 @@ class SalesApiTest extends TestCase
 
         $this->assertDatabaseCount('sales', 1);
         Queue::assertPushed(ProcessSalePoints::class, 1);
+        Log::shouldHaveReceived('info')->once()->withArgs(
+            fn (string $message, array $context): bool => $message === 'Sale duplicate ignored.'
+                && $context['external_id'] === $payload['external_id'],
+        );
     }
 
     public function test_points_job_is_idempotent_and_discards_fractional_points(): void
     {
+        Log::spy();
         $customer = Customer::factory()->create();
         $sale = Sale::factory()->for($customer)->create(['amount' => 35500]);
         $job = new ProcessSalePoints($sale->id);
@@ -88,6 +101,10 @@ class SalesApiTest extends TestCase
 
         $this->assertSame(35, $customer->fresh()->points_balance);
         $this->assertSame(35, $sale->fresh()->points_awarded);
+        Log::shouldHaveReceived('info')->once()->withArgs(
+            fn (string $message, array $context): bool => $message === 'Sale points processing skipped because it was already processed.'
+                && $context['sale_id'] === $sale->id,
+        );
     }
 
     public function test_two_sales_increment_the_same_customer_correctly(): void
@@ -119,6 +136,7 @@ class SalesApiTest extends TestCase
     {
         Queue::fake();
         Storage::fake('local');
+        Log::spy();
         $customer = Customer::factory()->create();
         $csv = implode("\n", [
             'external_id,customer_id,amount,occurred_at',
@@ -144,6 +162,11 @@ class SalesApiTest extends TestCase
         (new ProcessSalePoints($sale->id))->handle();
 
         $this->assertSame(35, $customer->fresh()->points_balance);
+        Log::shouldHaveReceived('warning')->once()->withArgs(
+            fn (string $message, array $context): bool => $message === 'CSV import row is invalid.'
+                && $context['csv_import_id'] === $import->id
+                && $context['line_number'] === 3,
+        );
     }
 
     public function test_csv_treats_a_webhook_sale_as_duplicate(): void
@@ -195,6 +218,22 @@ class SalesApiTest extends TestCase
         }
 
         $this->assertSame('failed', $import->fresh()->status);
+    }
+
+    public function test_sale_processing_failure_is_logged_and_rethrown(): void
+    {
+        Log::spy();
+
+        try {
+            (new ProcessSalePoints(999999))->handle();
+            $this->fail('The missing sale should throw an exception.');
+        } catch (\Throwable) {
+        }
+
+        Log::shouldHaveReceived('error')->once()->withArgs(
+            fn (string $message, array $context): bool => $message === 'Sale points processing attempt failed.'
+                && $context['sale_id'] === 999999,
+        );
     }
 
     /** @return array<string, int|string|float> */
