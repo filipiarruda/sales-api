@@ -1,0 +1,220 @@
+openapi: 3.0.3
+info:
+  title: Sales API
+  version: 1.0.0
+  description: |
+    API REST para receber vendas de parceiros e creditar pontos aos clientes.
+
+    - R$ 10,00 em vendas gera 1 ponto.
+    - O valor enviado em `amount` possui até duas casas decimais.
+    - A aplicação armazena valores internamente em centavos.
+servers:
+  - url: http://localhost:8000
+    description: Desenvolvimento local
+tags:
+  - name: Webhooks
+    description: Recebimento de vendas de parceiros.
+  - name: Importações
+    description: Importação assíncrona de vendas por CSV.
+  - name: Clientes
+    description: Consulta autenticada de saldo de pontos.
+paths:
+  /api/webhooks/sales:
+    post:
+      tags: [Webhooks]
+      summary: Recebe uma venda por webhook
+      description: |
+        Cria uma venda e agenda o processamento de pontos. Caso o `external_id`
+        já exista, responde como duplicidade e não agenda outro processamento.
+      security:
+        - WebhookSignature: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SaleInput'
+            example:
+              external_id: SALE-92831
+              customer_id: 145
+              amount: 350.00
+              occurred_at: '2026-08-20T14:30:00'
+      responses:
+        '201':
+          description: Venda criada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SaleCreationResponse'
+              example:
+                sale_id: 1
+                external_id: SALE-92831
+                status: created
+        '200':
+          description: Venda duplicada, já recebida anteriormente.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SaleCreationResponse'
+              example:
+                sale_id: 1
+                external_id: SALE-92831
+                status: duplicate
+        '401':
+          $ref: '#/components/responses/UnauthorizedSignature'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /api/imports/sales:
+    post:
+      tags: [Importações]
+      summary: Envia um arquivo CSV de vendas
+      description: |
+        Aceita CSV de até 10 MB, com cabeçalho obrigatório
+        `external_id,customer_id,amount,occurred_at`. O processamento ocorre na fila.
+        A assinatura HMAC deve ser calculada sobre o corpo multipart bruto.
+      security:
+        - WebhookSignature: []
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  description: Arquivo CSV com até 10 MB.
+      responses:
+        '202':
+          description: Importação aceita e enviada à fila.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CsvImportResponse'
+              example:
+                import_id: 1
+                status: pending
+        '401':
+          $ref: '#/components/responses/UnauthorizedSignature'
+        '422':
+          $ref: '#/components/responses/ValidationError'
+  /api/customers/{customer}/points:
+    get:
+      tags: [Clientes]
+      summary: Consulta o saldo de pontos do cliente
+      security:
+        - BearerAuth: []
+      parameters:
+        - name: customer
+          in: path
+          required: true
+          description: ID do cliente.
+          schema:
+            type: integer
+            example: 145
+      responses:
+        '200':
+          description: Saldo encontrado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CustomerPointsResponse'
+              example:
+                customer_id: 145
+                points: 35
+        '401':
+          description: Token Sanctum ausente ou inválido.
+        '404':
+          description: Cliente não encontrado.
+components:
+  securitySchemes:
+    WebhookSignature:
+      type: apiKey
+      in: header
+      name: X-Webhook-Signature
+      description: Assinatura HMAC para endpoints de parceiros.
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: Sanctum Token
+      description: Token pessoal gerado pelo Laravel Sanctum.
+  schemas:
+    SaleInput:
+      type: object
+      required: [external_id, customer_id, amount, occurred_at]
+      properties:
+        external_id:
+          type: string
+          maxLength: 100
+          example: SALE-92831
+        customer_id:
+          type: integer
+          example: 145
+        amount:
+          type: number
+          format: float
+          minimum: 0.01
+          example: 350.00
+        occurred_at:
+          type: string
+          format: date-time
+          example: '2026-08-20T14:30:00'
+    SaleCreationResponse:
+      type: object
+      required: [sale_id, external_id, status]
+      properties:
+        sale_id:
+          type: integer
+        external_id:
+          type: string
+        status:
+          type: string
+          enum: [created, duplicate]
+    CsvImportResponse:
+      type: object
+      required: [import_id, status]
+      properties:
+        import_id:
+          type: integer
+        status:
+          type: string
+          example: pending
+    CustomerPointsResponse:
+      type: object
+      required: [customer_id, points]
+      properties:
+        customer_id:
+          type: integer
+        points:
+          type: integer
+    ValidationError:
+      type: object
+      properties:
+        message:
+          type: string
+          example: O campo valor deve ser maior que zero.
+        errors:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+  responses:
+    UnauthorizedSignature:
+      description: Assinatura HMAC ausente ou inválida.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              message:
+                type: string
+                example: Assinatura do webhook inválida.
+    ValidationError:
+      description: Dados enviados são inválidos.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ValidationError'

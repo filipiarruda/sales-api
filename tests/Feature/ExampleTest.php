@@ -16,4 +16,11 @@ class ExampleTest extends TestCase
 
         $response->assertStatus(200);
     }
+
+    public function test_swagger_documentation_page_is_available(): void
+    {
+        $this->get('/docs')
+            ->assertOk()
+            ->assertSee('Sales API — Documentação');
+    }
 }

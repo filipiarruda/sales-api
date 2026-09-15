@@ -102,6 +102,12 @@ docker compose down -v # remove também os volumes locais de MySQL e Redis
 
 ## Endpoints
 
+A documentação interativa Swagger/OpenAPI em PT-BR fica disponível em:
+
+```text
+http://localhost:8000/docs
+```
+
 ### Receber venda por webhook
 
 `POST /api/webhooks/sales`
