@@ -19,13 +19,13 @@ class VerifyWebhookSignature
         $signature = $request->header('X-Webhook-Signature');
 
         if (! is_string($secret) || $secret === '' || ! is_string($signature)) {
-            return response()->json(['message' => 'Invalid webhook signature.'], Response::HTTP_UNAUTHORIZED);
+            return response()->json(['message' => 'Assinatura do webhook inválida.'], Response::HTTP_UNAUTHORIZED);
         }
 
         $expectedSignature = hash_hmac('sha256', $request->getContent(), $secret);
 
         if (! hash_equals($expectedSignature, $signature)) {
-            return response()->json(['message' => 'Invalid webhook signature.'], Response::HTTP_UNAUTHORIZED);
+            return response()->json(['message' => 'Assinatura do webhook inválida.'], Response::HTTP_UNAUTHORIZED);
         }
 
         return $next($request);

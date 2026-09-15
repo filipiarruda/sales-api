@@ -61,10 +61,11 @@ class SalesApiTest extends TestCase
         $this->withHeader('X-Webhook-Signature', $this->signature($payload))
             ->postJson('/api/webhooks/sales', $payload)
             ->assertUnprocessable()
-            ->assertJsonValidationErrors(['customer_id', 'amount']);
+            ->assertJsonValidationErrors(['customer_id', 'amount'])
+            ->assertJsonPath('errors.customer_id.0', 'O cliente informado não existe.');
 
         Log::shouldHaveReceived('warning')->once()->withArgs(
-            fn (string $message, array $context): bool => $message === 'Webhook sale payload is invalid.'
+            fn (string $message, array $context): bool => $message === 'Payload do webhook de venda é inválido.'
                 && $context['source'] === 'webhook',
         );
     }
@@ -84,7 +85,7 @@ class SalesApiTest extends TestCase
         $this->assertDatabaseCount('sales', 1);
         Queue::assertPushed(ProcessSalePoints::class, 1);
         Log::shouldHaveReceived('info')->once()->withArgs(
-            fn (string $message, array $context): bool => $message === 'Sale duplicate ignored.'
+            fn (string $message, array $context): bool => $message === 'Venda duplicada ignorada.'
                 && $context['external_id'] === $payload['external_id'],
         );
     }
@@ -102,7 +103,7 @@ class SalesApiTest extends TestCase
         $this->assertSame(35, $customer->fresh()->points_balance);
         $this->assertSame(35, $sale->fresh()->points_awarded);
         Log::shouldHaveReceived('info')->once()->withArgs(
-            fn (string $message, array $context): bool => $message === 'Sale points processing skipped because it was already processed.'
+            fn (string $message, array $context): bool => $message === 'O processamento dos pontos de venda foi ignorado porque já havia sido processado.'
                 && $context['sale_id'] === $sale->id,
         );
     }
@@ -163,7 +164,7 @@ class SalesApiTest extends TestCase
 
         $this->assertSame(35, $customer->fresh()->points_balance);
         Log::shouldHaveReceived('warning')->once()->withArgs(
-            fn (string $message, array $context): bool => $message === 'CSV import row is invalid.'
+            fn (string $message, array $context): bool => $message === 'Linha da importação CSV é inválida.'
                 && $context['csv_import_id'] === $import->id
                 && $context['line_number'] === 3,
         );
@@ -231,7 +232,7 @@ class SalesApiTest extends TestCase
         }
 
         Log::shouldHaveReceived('error')->once()->withArgs(
-            fn (string $message, array $context): bool => $message === 'Sale points processing attempt failed.'
+            fn (string $message, array $context): bool => $message === 'Tentativa de processamento dos pontos da venda falhou.'
                 && $context['sale_id'] === 999999,
         );
     }

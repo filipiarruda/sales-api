@@ -26,7 +26,7 @@ class ImportSalesCsv implements ShouldQueue
         $import = CsvImport::query()->findOrFail($this->csvImportId);
         $import->update(['status' => 'processing', 'started_at' => $import->started_at ?? now()]);
 
-        Log::info('Importação de arquivoCSV iniciada.', [
+        Log::info('Importação de CSV iniciada.', [
             'csv_import_id' => $import->id,
             'filename' => $import->filename,
         ]);
@@ -59,7 +59,7 @@ class ImportSalesCsv implements ShouldQueue
         } catch (Throwable $exception) {
             $import->update(['status' => 'failed', 'finished_at' => now()]);
 
-            Log::error('CSV import failed.', [
+            Log::error('Falha na importação do CSV.', [
                 'csv_import_id' => $import->id,
                 'filename' => $import->filename,
                 'exception' => $exception->getMessage(),
@@ -71,7 +71,7 @@ class ImportSalesCsv implements ShouldQueue
 
     public function failed(Throwable $exception): void
     {
-        Log::error('CSV import exhausted all retries.', [
+        Log::error('Job de importação CSV esgotou as tentativas.', [
             'csv_import_id' => $this->csvImportId,
             'exception' => $exception->getMessage(),
         ]);
@@ -104,7 +104,7 @@ class ImportSalesCsv implements ShouldQueue
         $externalId = isset($row[0]) ? trim((string) $row[0]) : null;
 
         if (count($row) !== count($header)) {
-            $message = 'CSV row has an invalid number of columns.';
+            $message = 'A linha do CSV possui uma quantidade inválida de colunas.';
             $this->recordRow($import, $lineNumber, $externalId, 'invalid', $message);
             $this->logInvalidRow($import, $lineNumber, $externalId, [$message]);
 
@@ -112,7 +112,12 @@ class ImportSalesCsv implements ShouldQueue
         }
 
         $data = array_combine($header, array_map(fn (?string $value): string => trim((string) $value), $row));
-        $validator = Validator::make($data, CreateSaleService::validationRules());
+        $validator = Validator::make(
+            $data,
+            CreateSaleService::validationRules(),
+            CreateSaleService::validationMessages(),
+            CreateSaleService::validationAttributes(),
+        );
 
         if ($validator->fails()) {
             $errors = $validator->errors()->all();
@@ -128,7 +133,7 @@ class ImportSalesCsv implements ShouldQueue
         } catch (Throwable $exception) {
             $this->recordRow($import, $lineNumber, $externalId, 'failed', $exception->getMessage());
 
-            Log::warning('CSV row processing failed.', [
+            Log::warning('Falha ao processar linha da importação CSV.', [
                 'csv_import_id' => $import->id,
                 'line_number' => $lineNumber,
                 'external_id' => $externalId,
@@ -147,7 +152,7 @@ class ImportSalesCsv implements ShouldQueue
 
     private function logInvalidRow(CsvImport $import, int $lineNumber, ?string $externalId, array $errors): void
     {
-        Log::warning('CSV import row is invalid.', [
+        Log::warning('Linha da importação CSV é inválida.', [
             'csv_import_id' => $import->id,
             'line_number' => $lineNumber,
             'external_id' => $externalId,
@@ -171,7 +176,7 @@ class ImportSalesCsv implements ShouldQueue
             'finished_at' => now(),
         ]);
 
-        Log::info('CSV import completed.', [
+        Log::info('Importação de CSV concluída.', [
             'csv_import_id' => $import->id,
             'status' => $failedRows > 0 ? 'completed_with_errors' : 'completed',
             'total_rows' => $processedRows + $ignoredRows + $failedRows,

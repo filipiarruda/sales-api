@@ -19,6 +19,16 @@ class StoreWebhookSaleRequest extends FormRequest
         return CreateSaleService::validationRules();
     }
 
+    public function messages(): array
+    {
+        return CreateSaleService::validationMessages();
+    }
+
+    public function attributes(): array
+    {
+        return CreateSaleService::validationAttributes();
+    }
+
     protected function failedValidation(Validator $validator): void
     {
         Log::warning('Payload do webhook de venda é inválido.', [
